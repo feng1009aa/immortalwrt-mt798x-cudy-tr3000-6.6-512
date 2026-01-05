@@ -106,8 +106,8 @@ jobs:
           git clone $REPO_URL -b $REPO_BRANCH openwrt
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
           
-          - name: Append custom device definition
-          run: |
+      - name: Append custom device definition
+        run: |
             cd openwrt/target/linux/mediatek/image
             cat $GITHUB_WORKSPACE/openwrt-mod/cudy-tr3000-512.mk >> filogic.mk
             echo "✅ Custom device definition appended to filogic.mk"
