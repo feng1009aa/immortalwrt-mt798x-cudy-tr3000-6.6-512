@@ -106,17 +106,17 @@ jobs:
           git clone $REPO_URL -b $REPO_BRANCH openwrt
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
           
-        - name: Append custom device definition
+          - name: Append custom device definition
           run: |
             cd openwrt/target/linux/mediatek/image
             cat $GITHUB_WORKSPACE/openwrt-mod/cudy-tr3000-512.mk >> filogic.mk
             echo "✅ Custom device definition appended to filogic.mk"
 
-    - name: Copy custom DTS file
-      run: |
-        cd openwrt
-        mkdir -p target/linux/mediatek/dts
-        cp -v $GITHUB_WORKSPACE/openwrt-mod/mt7981*.dts target/linux/mediatek/dts/
+      - name: Copy custom DTS file
+        run: |
+         cd openwrt
+         mkdir -p target/linux/mediatek/dts
+         cp -v $GITHUB_WORKSPACE/openwrt-mod/mt7981*.dts target/linux/mediatek/dts/
    
       - name: Get repo hash
         id: get-hash
