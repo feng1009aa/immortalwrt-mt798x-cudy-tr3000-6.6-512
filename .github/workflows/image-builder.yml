@@ -81,7 +81,7 @@ jobs:
     outputs:
       repo_hash: ${{ steps.get-hash.outputs.repo_hash }}
     
-    steps:
+  steps: 
     - name: Before freeing up disk space
       run: |
         echo "Before freeing up disk space"
@@ -127,8 +127,6 @@ jobs:
         echo "=============================================================================="
         df -hT
         echo "=============================================================================="
-
-
 steps:
       - name: Checkout
         uses: actions/checkout@main
