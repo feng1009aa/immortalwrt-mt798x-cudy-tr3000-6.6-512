@@ -40,3 +40,21 @@ sed -i 's|IMG_PREFIX:=|IMG_PREFIX:=$(shell TZ="Asia/Shanghai" date +"%Y%m%d")-24
 # compile and build
 # make download -j8
 # make -j$(nproc)
+# 修复rust编译时LLVM CI包404问题
+echo "=== 修复rust编译的LLVM CI下载404问题 ==="
+RUST_DIR="$PWD/feeds/packages/lang/rust"
+# 找到rust源码目录（编译时会下载到build_dir）
+RUST_SRC_DIR="$PWD/build_dir/target-aarch64_cortex-a53_musl/host/rustc-1.89.0-src"
+
+# 提前创建rust源码目录（确保配置文件能被修改）
+mkdir -p $RUST_SRC_DIR
+
+# 写入bootstrap.toml，禁用download-ci-llvm
+cat > $RUST_SRC_DIR/bootstrap.toml << EOF
+[llvm]
+download-ci-llvm = false
+EOF
+
+# 同时修改feeds中rust包的Makefile，强制使用本地LLVM构建
+sed -i '/PKG_BUILD_DEPENDS/s/$/ llvm/' $RUST_DIR/Makefile
+echo "✅ Rust LLVM CI下载禁用完成"
