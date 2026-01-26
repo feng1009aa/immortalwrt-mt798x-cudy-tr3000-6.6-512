@@ -122,53 +122,10 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive       
         run: |
-          set -euo pipefail
-          # 临时取消严格模式，允许非核心包安装失败
-          set +e
-          
-          # ===================== 步骤1：启用i386架构（核心） =====================
-          echo "=== 启用i386架构支持 ==="
-          sudo dpkg --add-architecture i386
-          # 验证架构
-          dpkg --print-foreign-architectures | grep -q i386 && echo "✅ i386架构启用成功" || echo "⚠️ i386架构启用失败，继续执行"
-          
-          # ===================== 步骤2：更换为Ubuntu官方源（海外环境稳定） =====================
-          echo "=== 更换为Ubuntu官方源 ==="
-          sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
-          sudo tee /etc/apt/sources.list > /dev/null << EOF
-          deb http://archive.ubuntu.com/ubuntu/ jammy main restricted universe multiverse
-          deb http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted universe multiverse
-          deb http://archive.ubuntu.com/ubuntu/ jammy-backports main restricted universe multiverse
-          deb http://security.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse
-          EOF
-          
-          # ===================== 步骤3：正确刷新APT缓存（无错误参数） =====================
-          echo "=== 刷新APT缓存 ==="
-          sudo -E apt-get clean
-          # 仅用基础参数更新，dpkg已启用i386，APT会自动加载双架构索引
-          sudo -E apt-get update -v -y --fix-missing || true
-          
-          # ===================== 步骤4：分批次安装依赖（核心包优先+容错） =====================
-          echo "=== 批次1：安装OpenWrt编译核心依赖（必选） ==="
-          # 只保留编译必需的包，去掉非必需的（antlr3/ecj/fastjar等）
-          sudo -E apt-get -qq install -y --fix-missing \
-            build-essential binutils bison flex gawk gcc g++ git make patch pkgconf \
-            gcc-multilib g++-multilib libc6-dev-i386 lib32gcc-s1 \
-            libssl-dev libz-dev libncurses-dev libreadline-dev libglib2.0-dev \
-            curl wget unzip rsync subversion squashfs-tools upx-ucl zstd
-          
-          echo "=== 批次2：安装可选工具（失败不影响） ==="
-          # 非核心工具，安装失败则警告，不终止流程
-          sudo -E apt-get -qq install -y --fix-missing \
-            ack-grep ccache clang cmake device-tree-compiler gettext-base autopoint \
-            libelf-dev libgmp3-dev libmpc-dev libmpfr-dev lld llvm lrzsz mkisofs \
-            nano ninja-build python3 python3-pip python3-ply qemu-utils re2c scons \
-            swig texinfo uglifyjs.terser xmlto xxd || echo "⚠️ 部分可选工具安装失败，不影响编译"
-          
-          # ===================== 步骤5：创建兼容软链接 =====================
-          echo "=== 创建兼容软链接 ==="
-          sudo ln -sf /usr/bin/ack-grep /usr/bin/ack || true
-          sudo ln -sf /usr/bin/uglifyjs.terser /usr/bin/uglifyjs || true
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
           
           # ===================== 步骤6：安装Node.js+pnpm =====================
           echo "=== 安装Node.js+pnpm ==="
