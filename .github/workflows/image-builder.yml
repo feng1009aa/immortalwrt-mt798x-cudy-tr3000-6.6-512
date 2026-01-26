@@ -123,71 +123,90 @@ jobs:
           DEBIAN_FRONTEND: noninteractive       
         run: |
           set -euo pipefail
-          # 临时取消严格模式（避免源替换时的非关键错误终止脚本）
+          # 临时取消严格模式（避免源替换/架构添加时的非关键错误终止脚本）
           set +e
-          # ===================== 核心修复：更换可靠的APT源 =====================
+          
+          # ===================== 核心修复1：启用i386架构（multilib依赖必需） =====================
+          echo "=== 启用i386架构支持（解决gcc-multilib等包无候选问题） ==="
+          sudo dpkg --add-architecture i386
+          # 验证架构是否添加成功
+          if dpkg --print-architecture | grep -q amd64 && dpkg --print-foreign-architectures | grep -q i386; then
+            echo "✅ i386架构启用成功"
+          else
+            echo "⚠️ i386架构启用失败，尝试强制添加"
+            sudo dpkg --add-architecture i386 || true
+          fi
+          
+          # ===================== 核心修复2：更换清华源并确保组件完整 =====================
           echo "=== 更换Ubuntu 22.04 APT源为清华镜像 ==="
-          # 备份原有源
           sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
-          # 替换为清华镜像源（适配Ubuntu 22.04 Jammy）
+          # 写入完整的清华源（包含main/restricted/universe/multiverse，适配所有包）
           sudo tee /etc/apt/sources.list > /dev/null << EOF
           deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy main restricted universe multiverse
           deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-updates main restricted universe multiverse
           deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-backports main restricted universe multiverse
           deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-security main restricted universe multiverse
           EOF
+          
+          # ===================== 核心修复3：强制刷新双架构APT缓存 =====================
+          echo "=== 强制刷新APT缓存（含amd64+i386） ==="
+          sudo -E apt-get clean  # 清空旧缓存
+          # 强制更新缓存，修复缺失的索引
+          sudo -E apt-get update -v -y --fix-missing --allow-unauthenticated
+          # 单独刷新双架构缓存，确保i386包索引生效
+          sudo -E apt-get update --arch=amd64 --arch=i386 || true
+          
           # 恢复严格模式
           set -e
-
+          
           # ===================== 清理冗余文件 =====================
           echo "=== 清理系统冗余文件 ==="
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
-
-          # ===================== 更新APT缓存并修复依赖 =====================
-          echo "=== 更新APT缓存（强制刷新） ==="
-          # 强制更新缓存，忽略旧索引
-          sudo -E apt-get clean
-          sudo -E apt-get update -v -y --fix-missing
-
-          # ===================== 安装编译依赖（添加容错参数） =====================
-          echo "=== 安装编译依赖 ==="
+          
+          # ===================== 核心修复4：修正包名 + 分批次安装依赖 =====================
+          echo "=== 批次1：安装基础编译依赖（必选） ==="
+          # 替换错误包名：ack→ack-grep、gnutls-dev→libgnutls28-dev、uglifyjs→uglifyjs.terser
           sudo -E apt-get -qq install -y --fix-missing --no-install-recommends \
-            ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl \
-            device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man \
+            ack-grep antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl \
+            device-tree-compiler ecj fastjar flex gawk gettext-base gcc-multilib g++-multilib git libgnutls28-dev gperf haveged help2man \
             intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev \
             libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp \
             nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools \
-            qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
-
+            qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs.terser upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+          
+          # ===================== 核心修复5：创建兼容软链接（适配旧脚本） =====================
+          echo "=== 创建兼容软链接（ack-grep→ack、uglifyjs.terser→uglifyjs） ==="
+          sudo ln -sf /usr/bin/ack-grep /usr/bin/ack || true
+          sudo ln -sf /usr/bin/uglifyjs.terser /usr/bin/uglifyjs || true
+          
           # ===================== 安装Node.js+pnpm（国内源加速） =====================
           echo "=== 安装Node.js 20.x + pnpm ==="
-          # 使用淘宝镜像加速Node.js安装
           curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
           sudo -E apt-get -qq install -y nodejs --fix-missing
-          # 配置npm国内源
           npm config set registry https://registry.npmmirror.com
-          # 容错安装pnpm
           sudo npm install -g pnpm --unsafe-perm || sudo npm install -g pnpm --unsafe-perm --registry=https://registry.npmmirror.com
-
+          
           # ===================== 清理APT缓存 =====================
           echo "=== 清理APT缓存 ==="
           sudo -E apt-get -qq autoremove --purge
           sudo -E apt-get -qq clean
-
+          
           # ===================== 配置时区和工作目录 =====================
           echo "=== 配置系统环境 ==="
           sudo timedatectl set-timezone "$TZ"
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
-
+          
           # ===================== 验证核心依赖 =====================
           echo "=== 验证核心依赖安装结果 ==="
           gcc --version | head -n1
           python3 --version
           node -v
           pnpm -v
-
+          ack --version | head -n1  # 验证软链接
+          clang --version | head -n1
+          
           echo "=== 环境初始化完成 ==="
           
       - name: Clone source code
