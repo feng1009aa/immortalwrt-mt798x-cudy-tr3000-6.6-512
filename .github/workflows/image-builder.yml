@@ -183,6 +183,15 @@ jobs:
           sudo -E apt-get -qq clean || true
           sudo timedatectl set-timezone "$TZ" || true
           sudo mkdir -p /workdir && sudo chown $USER:$GROUPS /workdir || true
+          # 新增swap分区（解决本地构建LLVM内存不足问题）
+          echo "=== 配置8GB swap分区 ==="
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          # 验证swap是否生效
+          swapon --show
+           free -h
           
           # 恢复严格模式
           set -e
