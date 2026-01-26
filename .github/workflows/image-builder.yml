@@ -78,6 +78,10 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    # 关键：添加权限声明，确保上传Release有足够权限
+    permissions:
+      contents: write
+      actions: read
     outputs:
       repo_hash: ${{ steps.get-hash.outputs.repo_hash }}
     
@@ -104,51 +108,87 @@ jobs:
           
       - name: 验证空间清理结果
         run: |
-         echo "Free up disk space complete"
-         echo "=============================================================================="
-         df -hT
-         echo "=============================================================================="
+          echo "Free up disk space complete"
+          echo "=============================================================================="
+          df -hT
+          echo "=============================================================================="
       
       - name: Checkout
-        uses: actions/checkout@v4  # 【修改1】固定版本，替代不稳定的main分支
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 1  # 仅拉取最新提交，加速检出
+          fetch-depth: 1
        
       - name: Initialization environment
         env:
           DEBIAN_FRONTEND: noninteractive       
         run: |
           set -euo pipefail
-          # 清理冗余文件
+          # 临时取消严格模式（避免源替换时的非关键错误终止脚本）
+          set +e
+          # ===================== 核心修复：更换可靠的APT源 =====================
+          echo "=== 更换Ubuntu 22.04 APT源为清华镜像 ==="
+          # 备份原有源
+          sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+          # 替换为清华镜像源（适配Ubuntu 22.04 Jammy）
+          sudo tee /etc/apt/sources.list > /dev/null << EOF
+          deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy main restricted universe multiverse
+          deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-updates main restricted universe multiverse
+          deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-backports main restricted universe multiverse
+          deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-security main restricted universe multiverse
+          EOF
+          # 恢复严格模式
+          set -e
+
+          # ===================== 清理冗余文件 =====================
+          echo "=== 清理系统冗余文件 ==="
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
-          # 更新源并安装编译依赖
-          sudo -E apt-get -qq update -v
-          sudo -E apt-get -qq install -y \
+
+          # ===================== 更新APT缓存并修复依赖 =====================
+          echo "=== 更新APT缓存（强制刷新） ==="
+          # 强制更新缓存，忽略旧索引
+          sudo -E apt-get clean
+          sudo -E apt-get update -v -y --fix-missing
+
+          # ===================== 安装编译依赖（添加容错参数） =====================
+          echo "=== 安装编译依赖 ==="
+          sudo -E apt-get -qq install -y --fix-missing --no-install-recommends \
             ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl \
             device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man \
             intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev \
             libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp \
             nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools \
             qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
-          # 安装新版Node.js+pnpm（配置国内源加速）
+
+          # ===================== 安装Node.js+pnpm（国内源加速） =====================
+          echo "=== 安装Node.js 20.x + pnpm ==="
+          # 使用淘宝镜像加速Node.js安装
           curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-          sudo -E apt-get -qq install -y nodejs
-          npm config set registry https://registry.npmmirror.com  # 【修改2】国内源加速
-          sudo npm install -g pnpm --unsafe-perm
-          # 清理apt缓存
+          sudo -E apt-get -qq install -y nodejs --fix-missing
+          # 配置npm国内源
+          npm config set registry https://registry.npmmirror.com
+          # 容错安装pnpm
+          sudo npm install -g pnpm --unsafe-perm || sudo npm install -g pnpm --unsafe-perm --registry=https://registry.npmmirror.com
+
+          # ===================== 清理APT缓存 =====================
+          echo "=== 清理APT缓存 ==="
           sudo -E apt-get -qq autoremove --purge
           sudo -E apt-get -qq clean
-          # 配置时区和工作目录
+
+          # ===================== 配置时区和工作目录 =====================
+          echo "=== 配置系统环境 ==="
           sudo timedatectl set-timezone "$TZ"
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
-          # 验证关键依赖安装
-          echo "=== 验证核心依赖 ==="
+
+          # ===================== 验证核心依赖 =====================
+          echo "=== 验证核心依赖安装结果 ==="
           gcc --version | head -n1
           python3 --version
           node -v
           pnpm -v
+
+          echo "=== 环境初始化完成 ==="
           
       - name: Clone source code
         working-directory: /workdir
@@ -166,7 +206,7 @@ jobs:
       - name: Append custom device definition
         run: |
           set -euo pipefail
-          # 【修改3】容错：检查文件是否存在
+          # 容错：检查文件是否存在
           DEVICE_DEF="$GITHUB_WORKSPACE/openwrt-mod/cudy-tr3000-512.mk"
           if [ -f "$DEVICE_DEF" ]; then
             cd openwrt/target/linux/mediatek/image
@@ -179,7 +219,7 @@ jobs:
       - name: Copy custom DTS file
         run: |
           set -euo pipefail
-          # 【修改4】容错：检查文件是否存在
+          # 容错：检查文件是否存在
           DTS_FILES="$GITHUB_WORKSPACE/openwrt-mod/mt7981*.dts"
           if ls $DTS_FILES 1> /dev/null 2>&1; then
             cd openwrt
@@ -197,7 +237,7 @@ jobs:
       - name: Load custom feeds
         run: |
           set -euo pipefail
-          # 【修改5】容错：检查feeds配置文件是否存在
+          # 容错：检查feeds配置文件是否存在
           if [ -e "$FEEDS_CONF" ]; then
             mv $FEEDS_CONF openwrt/feeds.conf.default
             echo "✅ 自定义Feeds配置已加载"
@@ -222,7 +262,7 @@ jobs:
       - name: Install feeds
         run: |
           set -euo pipefail
-          # 【修改6】修复语法错误：续行符+在OpenWrt目录执行
+          # 修复语法错误：续行符+在OpenWrt目录执行
           cd openwrt && \
             ./scripts/feeds install -a && \
             # 容错：仅当qmodem feeds存在时强制安装
@@ -231,7 +271,7 @@ jobs:
       - name: Load custom configuration
         run: |
           set -euo pipefail
-          # 【修改7】容错：检查自定义文件/配置
+          # 容错：检查自定义文件/配置
           if [ -d "files" ]; then
             mv files openwrt/files
             echo "✅ 自定义files目录已加载"
@@ -260,7 +300,7 @@ jobs:
           set -euo pipefail
           cd openwrt
           make defconfig
-          make download -j$(nproc)  # 【修改8】适配CPU核心数，替代固定-j8
+          make download -j$(nproc)
           # 清理空文件
           find dl -size -1024c -exec ls -l {} \;
           find dl -size -1024c -exec rm -f {} \;
@@ -273,10 +313,11 @@ jobs:
           cd openwrt
           CORE_NUM=$(nproc)
           echo -e "$CORE_NUM thread compile"
-          # 【修改9】编译失败时输出详细日志，便于排查
+          # 编译失败时输出详细日志并保存
           make -j$CORE_NUM || {
             echo "⚠️ 多线程编译失败，切换为单线程详细日志模式"
-            make -j1 V=s
+            make -j1 V=s 2>&1 | tee compile_error.log
+            exit 1
           }
           # 提取设备名称（容错）
           grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
@@ -286,20 +327,28 @@ jobs:
             DEVICE_NAME_VAL="unknown"
           fi
           echo "DEVICE_NAME=$DEVICE_NAME_VAL" >> $GITHUB_ENV
-          echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+          echo "FILE_DATE=$(date +"%Y%m%d%H%M%S")" >> $GITHUB_ENV  # 加秒级避免标签重复
           echo "✅ 固件编译完成"
+
+      - name: Upload compile log (if failed)
+        uses: actions/upload-artifact@v4
+        if: steps.compile.conclusion == 'failure'
+        with:
+          name: compile_error_log_${{ env.FILE_DATE }}
+          path: openwrt/compile_error.log
+          retention-days: 30
 
       - name: Check space usage
         if: (!cancelled())
         run: df -hT
 
       - name: Upload bin directory
-        uses: actions/upload-artifact@v4  # 【修改10】固定版本
+        uses: actions/upload-artifact@v4
         if: steps.compile.conclusion == 'success' && env.UPLOAD_BIN_DIR == 'true' && !cancelled()
         with:
           name: OpenWrt_bin_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
           path: openwrt/bin
-          retention-days: 7  # 【新增】设置保留7天，避免Artifact堆积
+          retention-days: 7
 
       - name: Organize files
         id: organize
@@ -312,19 +361,19 @@ jobs:
           echo "✅ 固件文件整理完成"
 
       - name: Upload firmware directory
-        uses: actions/upload-artifact@v4  # 【修改11】固定版本
+        uses: actions/upload-artifact@v4
         if: steps.organize.conclusion == 'success' && !cancelled()
         with:
           name: OpenWrt_firmware_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
           path: ${{ env.FIRMWARE }}
-          retention-days: 30  # 【新增】固件保留30天
+          retention-days: 30
 
       - name: Generate release tag
         id: tag
         if: steps.compile.conclusion == 'success' && env.UPLOAD_RELEASE == 'true' && !cancelled()
         run: |
           set -euo pipefail
-          RELEASE_TAG=$(date +"%Y.%m.%d-%H%M")
+          RELEASE_TAG=$(date +"%Y.%m.%d-%H%M%S")  # 秒级标签避免重复
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
           # 容错：创建release文件（不存在则新建）
           touch "${RELEASE_FILE}"
@@ -356,7 +405,7 @@ jobs:
           prerelease: false
 
   cleanup:
-    if: success() || failure()  # 【修改12】失败/成功都清理，避免空间浪费
+    if: success() || failure()
     uses: ./.github/workflows/clean-up.yml
     needs: build
     with:
