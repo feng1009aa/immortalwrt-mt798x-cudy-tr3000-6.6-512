@@ -164,6 +164,7 @@ jobs:
 
       - name: Install feeds
         run: cd openwrt && ./scripts/feeds install -a
+            ./scripts/feeds install -a -f -p qmodem
 
       - name: Load custom configuration
         run: |
