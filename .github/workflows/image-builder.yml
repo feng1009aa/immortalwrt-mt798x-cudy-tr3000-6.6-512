@@ -1,7 +1,7 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
 #
-# File: .github/workflows/openwrt-bulder.yml
+# File: .github/workflows/image-builder.yml
 # Description: Build OpenWrt using GitHub Actions
 #
 # Copyright (c) 2019-2024 P3TERX <https://p3terx.com>
@@ -82,7 +82,6 @@ jobs:
       repo_hash: ${{ steps.get-hash.outputs.repo_hash }}
     
     steps: 
-      
       - name: 检查服务器配置
         run: |
           echo "已知CPU型号（降序）：7763,8370C,8272CL,8171M,E5系列"
@@ -91,6 +90,7 @@ jobs:
           echo -e "CPU核心及版本信息：$(cat /proc/cpuinfo | grep name | cut -f2 -d: | uniq -c) \n"
           echo "--------------------------硬盘信息--------------------------"
           echo -e "$(df -hT)"
+
       - name: 清理系统
         uses: jlumbroso/free-disk-space@main
         with:
@@ -102,7 +102,7 @@ jobs:
           docker-images: true
           swap-storage: true
           
-      - name: Free up disk space complete
+      - name: 验证空间清理结果
         run: |
          echo "Free up disk space complete"
          echo "=============================================================================="
@@ -110,43 +110,85 @@ jobs:
          echo "=============================================================================="
       
       - name: Checkout
-        uses: actions/checkout@main
+        uses: actions/checkout@v4  # 【修改1】固定版本，替代不稳定的main分支
+        with:
+          fetch-depth: 1  # 仅拉取最新提交，加速检出
        
       - name: Initialization environment
         env:
           DEBIAN_FRONTEND: noninteractive       
         run: |
+          set -euo pipefail
+          # 清理冗余文件
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
-          sudo -E apt-get -qq update
-          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+          # 更新源并安装编译依赖
+          sudo -E apt-get -qq update -v
+          sudo -E apt-get -qq install -y \
+            ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl \
+            device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man \
+            intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev \
+            libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp \
+            nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools \
+            qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+          # 安装新版Node.js+pnpm（配置国内源加速）
           curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
           sudo -E apt-get -qq install -y nodejs
+          npm config set registry https://registry.npmmirror.com  # 【修改2】国内源加速
           sudo npm install -g pnpm --unsafe-perm
+          # 清理apt缓存
           sudo -E apt-get -qq autoremove --purge
           sudo -E apt-get -qq clean
+          # 配置时区和工作目录
           sudo timedatectl set-timezone "$TZ"
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
+          # 验证关键依赖安装
+          echo "=== 验证核心依赖 ==="
+          gcc --version | head -n1
+          python3 --version
+          node -v
+          pnpm -v
           
       - name: Clone source code
         working-directory: /workdir
         run: |
+          set -euo pipefail
           df -hT $PWD
-          git clone $REPO_URL -b $REPO_BRANCH openwrt
+          # 容错：已存在则拉取最新代码
+          if [ -d openwrt ]; then
+            cd openwrt && git pull origin $REPO_BRANCH
+          else
+            git clone $REPO_URL -b $REPO_BRANCH openwrt
+          fi
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
           
       - name: Append custom device definition
         run: |
+          set -euo pipefail
+          # 【修改3】容错：检查文件是否存在
+          DEVICE_DEF="$GITHUB_WORKSPACE/openwrt-mod/cudy-tr3000-512.mk"
+          if [ -f "$DEVICE_DEF" ]; then
             cd openwrt/target/linux/mediatek/image
-            cat $GITHUB_WORKSPACE/openwrt-mod/cudy-tr3000-512.mk >> filogic.mk
+            cat "$DEVICE_DEF" >> filogic.mk
             echo "✅ Custom device definition appended to filogic.mk"
+          else
+            echo "⚠️ 自定义设备定义文件不存在：$DEVICE_DEF，跳过追加"
+          fi
 
       - name: Copy custom DTS file
         run: |
-         cd openwrt
-         mkdir -p target/linux/mediatek/dts
-         cp -v $GITHUB_WORKSPACE/openwrt-mod/mt7981*.dts target/linux/mediatek/dts/
+          set -euo pipefail
+          # 【修改4】容错：检查文件是否存在
+          DTS_FILES="$GITHUB_WORKSPACE/openwrt-mod/mt7981*.dts"
+          if ls $DTS_FILES 1> /dev/null 2>&1; then
+            cd openwrt
+            mkdir -p target/linux/mediatek/dts
+            cp -v $DTS_FILES target/linux/mediatek/dts/
+            echo "✅ 自定义DTS文件复制完成"
+          else
+            echo "⚠️ 未找到自定义DTS文件（$DTS_FILES），跳过复制"
+          fi
    
       - name: Get repo hash
         id: get-hash
@@ -154,85 +196,152 @@ jobs:
 
       - name: Load custom feeds
         run: |
-          [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
-          chmod +x $DIY_P1_SH
-          cd openwrt
-          $GITHUB_WORKSPACE/$DIY_P1_SH
+          set -euo pipefail
+          # 【修改5】容错：检查feeds配置文件是否存在
+          if [ -e "$FEEDS_CONF" ]; then
+            mv $FEEDS_CONF openwrt/feeds.conf.default
+            echo "✅ 自定义Feeds配置已加载"
+          else
+            echo "⚠️ Feeds配置文件不存在：$FEEDS_CONF，使用默认配置"
+          fi
+          # 容错：检查DIY_P1脚本是否存在
+          if [ -f "$DIY_P1_SH" ]; then
+            chmod +x $DIY_P1_SH
+            cd openwrt
+            $GITHUB_WORKSPACE/$DIY_P1_SH
+            echo "✅ DIY_P1脚本执行完成"
+          else
+            echo "⚠️ DIY_P1脚本不存在：$DIY_P1_SH，跳过执行"
+          fi
 
       - name: Update feeds
-        run: cd openwrt && ./scripts/feeds update -a
+        run: |
+          set -euo pipefail
+          cd openwrt && ./scripts/feeds update -a
 
       - name: Install feeds
-        run: cd openwrt && ./scripts/feeds install -a
-            ./scripts/feeds install -a -f -p qmodem
+        run: |
+          set -euo pipefail
+          # 【修改6】修复语法错误：续行符+在OpenWrt目录执行
+          cd openwrt && \
+            ./scripts/feeds install -a && \
+            # 容错：仅当qmodem feeds存在时强制安装
+            (./scripts/feeds install -a -f -p qmodem || echo "⚠️ QModem Feeds安装失败，可能源不存在")
 
       - name: Load custom configuration
         run: |
-          [ -e files ] && mv files openwrt/files
-          [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
-          chmod +x $DIY_P2_SH
-          cd openwrt
-          $GITHUB_WORKSPACE/$DIY_P2_SH
+          set -euo pipefail
+          # 【修改7】容错：检查自定义文件/配置
+          if [ -d "files" ]; then
+            mv files openwrt/files
+            echo "✅ 自定义files目录已加载"
+          else
+            echo "⚠️ 未找到files目录，跳过"
+          fi
+          if [ -e "$CONFIG_FILE" ]; then
+            mv $CONFIG_FILE openwrt/.config
+            echo "✅ 自定义配置文件已加载"
+          else
+            echo "⚠️ 配置文件不存在：$CONFIG_FILE，使用默认配置"
+          fi
+          # 容错：检查DIY_P2脚本
+          if [ -f "$DIY_P2_SH" ]; then
+            chmod +x $DIY_P2_SH
+            cd openwrt
+            $GITHUB_WORKSPACE/$DIY_P2_SH
+            echo "✅ DIY_P2脚本执行完成"
+          else
+            echo "⚠️ DIY_P2脚本不存在：$DIY_P2_SH，跳过执行"
+          fi
 
       - name: Download package
         id: package
         run: |
+          set -euo pipefail
           cd openwrt
           make defconfig
-          make download -j8
+          make download -j$(nproc)  # 【修改8】适配CPU核心数，替代固定-j8
+          # 清理空文件
           find dl -size -1024c -exec ls -l {} \;
           find dl -size -1024c -exec rm -f {} \;
+          echo "✅ 依赖包下载完成"
 
       - name: Compile the firmware
         id: compile
         run: |
+          set -euo pipefail
           cd openwrt
-          echo -e "$(nproc) thread compile"
-          make -j$(nproc) || make -j1 || make -j1 V=s
+          CORE_NUM=$(nproc)
+          echo -e "$CORE_NUM thread compile"
+          # 【修改9】编译失败时输出详细日志，便于排查
+          make -j$CORE_NUM || {
+            echo "⚠️ 多线程编译失败，切换为单线程详细日志模式"
+            make -j1 V=s
+          }
+          # 提取设备名称（容错）
           grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-          [ -s DEVICE_NAME ] && echo "DEVICE_NAME=$(cat DEVICE_NAME)" >> $GITHUB_ENV || echo "DEVICE_NAME=unknown" >> $GITHUB_ENV
+          if [ -s DEVICE_NAME ]; then
+            DEVICE_NAME_VAL=$(cat DEVICE_NAME)
+          else
+            DEVICE_NAME_VAL="unknown"
+          fi
+          echo "DEVICE_NAME=$DEVICE_NAME_VAL" >> $GITHUB_ENV
           echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+          echo "✅ 固件编译完成"
 
       - name: Check space usage
         if: (!cancelled())
         run: df -hT
 
       - name: Upload bin directory
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v4  # 【修改10】固定版本
         if: steps.compile.conclusion == 'success' && env.UPLOAD_BIN_DIR == 'true' && !cancelled()
         with:
           name: OpenWrt_bin_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
           path: openwrt/bin
+          retention-days: 7  # 【新增】设置保留7天，避免Artifact堆积
 
       - name: Organize files
         id: organize
         if: steps.compile.conclusion == 'success' && env.UPLOAD_FIRMWARE == 'true' && !cancelled()
         run: |
+          set -euo pipefail
           cd openwrt/bin/targets/*/*
           rm -rf packages
           echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+          echo "✅ 固件文件整理完成"
 
       - name: Upload firmware directory
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v4  # 【修改11】固定版本
         if: steps.organize.conclusion == 'success' && !cancelled()
         with:
           name: OpenWrt_firmware_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
           path: ${{ env.FIRMWARE }}
+          retention-days: 30  # 【新增】固件保留30天
 
       - name: Generate release tag
         id: tag
         if: steps.compile.conclusion == 'success' && env.UPLOAD_RELEASE == 'true' && !cancelled()
         run: |
-          echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          RELEASE_TAG=$(date +"%Y.%m.%d-%H%M")
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          # 容错：创建release文件（不存在则新建）
           touch "${RELEASE_FILE}"
           BADGE=$(mktemp)
+          # 生成状态徽章
           cat > "$BADGE" << EOF
           [![Build Time](https://img.shields.io/badge/build-$(date +"%Y--%m--%d_%H:%M")-brightgreen?logo=github)](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) \
           ![Device](https://img.shields.io/badge/device-$(echo ${{ env.DEVICE_NAME }} | sed 's/-/--/g')-blue) \
           [![Source Repo](https://img.shields.io/badge/source-repo-orange?logo=github)](${REPO_URL}/tree/${REPO_BRANCH}) \
           [![Commit](https://img.shields.io/badge/commit-$(git -C openwrt rev-parse --short HEAD)-yellow?logo=github)](${REPO_URL}/commit/$(git -C openwrt rev-parse HEAD))
           EOF
-          grep -q "!\[Badge\]" "${RELEASE_FILE}" && sed -i "/!\[Badge\]/r ${BADGE}" "${RELEASE_FILE}" && sed -i "/!\[Badge\]/d" "${RELEASE_FILE}" || sed -i "1r ${BADGE}" "${RELEASE_FILE}"
+          # 容错：插入徽章（无旧徽章则插在第一行）
+          grep -q "!\[Badge\]" "${RELEASE_FILE}" && \
+            sed -i "/!\[Badge\]/r ${BADGE}" "${RELEASE_FILE}" && \
+            sed -i "/!\[Badge\]/d" "${RELEASE_FILE}" || \
+            sed -i "1r ${BADGE}" "${RELEASE_FILE}"
+          echo "✅ Release标签和徽章生成完成"
 
       - name: Upload firmware to release
         uses: softprops/action-gh-release@v2
@@ -243,9 +352,11 @@ jobs:
           tag_name: ${{ steps.tag.outputs.release_tag }}
           body_path: ${{ env.RELEASE_FILE }}
           files: ${{ env.FIRMWARE }}/*
+          draft: false
+          prerelease: false
 
   cleanup:
-    if: success()
+    if: success() || failure()  # 【修改12】失败/成功都清理，避免空间浪费
     uses: ./.github/workflows/clean-up.yml
     needs: build
     with:
