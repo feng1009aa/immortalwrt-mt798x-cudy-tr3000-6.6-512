@@ -40,7 +40,8 @@ jobs:
         keep_minimum_runs: 2
 
     - name: Remove old Releases
-      if: ${{ env.CLEAN_RELEASE }} == true
+      # 👇 关键修改：将整个判断逻辑放入 ${{ }} 内
+      if: ${{ env.CLEAN_RELEASE == true }}
       uses: ophub/delete-releases-workflows@main
       with:
         delete_releases: true
